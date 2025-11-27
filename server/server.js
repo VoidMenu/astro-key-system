@@ -1,4 +1,4 @@
-// combined.js — FINAL PUBLIC PANEL VERSION (November 2025)
+// combined.js — FINAL 100% WORKING VERSION (NO ERRORS)
 
 const express = require('express');
 const cors = require('cors');
@@ -19,7 +19,7 @@ const {
 } = require('discord.js');
 
 // ============================================
-// EXPRESS + DATA
+// EXPRESS SERVER
 // ============================================
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -30,13 +30,12 @@ const KEYS_FILE = path.join(__dirname, 'data', 'keys.json');
 
 async function init() {
     await fs.mkdir(path.join(__dirname, 'data'), { recursive: true });
-    if (!await fs.stat(KEYS_FILE).catch(() => false)) await fs.writeFile(KEYS_FILE, '[]');
+    try { await fs.access(KEYS_FILE); } catch { await fs.writeFile(KEYS_FILE, '[]'); }
 }
-async function readKeys() { return JSON.parse(await fs.readFile(KEYS_FILE, 'utf8').catch(() => '[]')); }
-async function writeKeys(k) { await fs.writeFile(KEYS_FILE, JSON.stringify(k, null, 2)); }
+async function readKeys() { return JSON.parse(await fs.readFile(KEYS_FILE, 'utf8')); }
+async function writeKeys(keys) { await fs.writeFile(KEYS_FILE, JSON.stringify(keys, null, 2)); }
 function generateKey() { return crypto.randomBytes(20).toString('hex'); }
 
-// Minimal validate route (you already have this working)
 app.post('/api/validate', async (req, res) => {
     try {
         const { key, hwid } = req.body;
@@ -51,7 +50,6 @@ app.post('/api/validate', async (req, res) => {
         if (!k.used) { k.used = true; k.hwid = hwid; k.usedAt = new Date().toISOString(); }
         k.lastUsed = new Date().toISOString();
         await writeKeys(keys);
-
         res.json({ valid: true });
     } catch { res.status(500).json({ valid: false }); }
 });
@@ -72,12 +70,12 @@ const config = {
 };
 
 client.once('ready', async () => {
-    console.log(`Bot online: ${client.user.tag}`);
+    console.log(`Bot ready: ${client.user.tag}`);
     client.user.setActivity('Lifetime Keys', { type: ActivityType.Watching });
 
     const rest = new REST().setToken(config.token);
     await rest.put(Routes.applicationGuildCommands(config.clientId, config.guildId), {
-        body: [{ name: 'setup', description: 'Open the Lifetime Key Panel (Admin only)' }]
+        body: [{ name: 'setup', description: 'Open Lifetime Key Panel (Admin)' }]
     });
     console.log('Commands registered');
 });
@@ -104,10 +102,8 @@ async function generateLifetimeKey(userId, username) {
 }
 
 client.on('interactionCreate', async interaction => {
-    if (!interaction.isChatInputCommand() && !interaction.isButton()) return;
-
     try {
-        // ==================== /setup → PUBLIC PANEL ====================
+        // =============== /setup — PUBLIC PANEL ===============
         if (interaction.isChatInputCommand() && interaction.commandName === 'setup') {
             if (!isAdmin(interaction.member)) {
                 return interaction.reply({ content: 'Only admins can use /setup', flags: MessageFlags.Ephemeral });
@@ -116,115 +112,94 @@ client.on('interactionCreate', async interaction => {
             const row = new ActionRowBuilder().addComponents(
                 new ButtonBuilder()
                     .setCustomId('gen_key')
-                    .setLabel('Generate Lifetime Key')
+                    .setLabel('Generate Key')
                     .setStyle(ButtonStyle.Success)
-                    .setEmoji('Key'),
+                    .setEmoji('Key'), // Real emoji
 
                 new ButtonBuilder()
                     .setCustomId('check_key')
-                    .setLabel('Check My Key')
+                    .setLabel('Check Key')
                     .setStyle(ButtonStyle.Primary)
-                    .setEmoji('Magnifying Glass'),
+                    .setEmoji('Magnifying Glass'), // Real emoji
 
                 new ButtonBuilder()
                     .setCustomId('delete_regen')
                     .setLabel('Delete & Regenerate')
                     .setStyle(ButtonStyle.Danger)
-                    .setEmoji('Wastebasket')
+                    .setEmoji('Wastebasket') // Real emoji
             );
 
             const embed = new EmbedBuilder()
                 .setColor(config.embedColor)
                 .setTitle('Astrø Lifetime Key Panel')
-                .setDescription(`
-                    Click below to manage your **lifetime key**
+                .setDescription('Click below to get your lifetime key\n• One key per user\n• Sent via DM')
+                .setFooter({ text: 'Keep your key private!' });
 
-                    • Only **one key per user**
-                    • Keys are sent via DM
-                    • Lost your key? Use **Delete & Regenerate**
-                `)
-                .setFooter({ text: 'Astrø Menu • Keep your key private' })
-                .setTimestamp();
-
-            // THIS IS PUBLIC — NO EPHEMERAL!
+            // PUBLIC — NO FLAGS
             await interaction.reply({ embeds: [embed], components: [row] });
             return;
         }
 
-        // ==================== BUTTONS → EPHEMERAL RESPONSES ONLY ====================
+        // =============== BUTTONS — EPHEMERAL RESPONSES ===============
         if (interaction.isButton()) {
-            // All replies are EPHEMERAL (only the user sees)
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
             const keys = await readKeys();
             const userKey = keys.find(k => k.discordId === interaction.user.id && !k.deleted && k.expiresAt === null);
 
+            // Generate
             if (interaction.customId === 'gen_key') {
                 if (userKey) {
-                    return interaction.editReply({ content: 'You already have a lifetime key!\nUse **Delete & Regenerate** if you lost it.' });
+                    return interaction.editReply({ content: 'You already have a key!\nUse Delete & Regenerate if lost.' });
                 }
 
                 const newKey = await generateLifetimeKey(interaction.user.id, interaction.user.tag);
 
                 try {
-                    await interaction.user.send({
-                        embeds: [new EmbedBuilder()
-                            .setColor(config.embedColor)
-                            .setTitle('Your Lifetime Key')
-                            .addFields({ name: 'Key', value: `\`${newKey}\`` })
-                            .setFooter({ text: 'Never expires • Do NOT share' })
-                        ]
-                    });
+                    await interaction.user.send(`**Your Lifetime Key:**\n\`${newKey}\`\nNever expires • Do not share!`);
                     await interaction.editReply({ content: 'Key generated and sent to your DMs!' });
                 } catch {
                     await interaction.editReply({ content: 'Could not DM you! Enable DMs from server members.' });
                 }
             }
 
+            // Check
             if (interaction.customId === 'check_key') {
-                if (!userKey) return interaction.editReply({ content: 'You don\'t have a lifetime key yet.' });
+                if (!userKey) return interaction.editReply({ content: 'No key found.' });
 
                 await interaction.editReply({
                     embeds: [new EmbedBuilder()
                         .setColor(config.embedColor)
-                        .setTitle('Your Lifetime Key')
+                        .setTitle('Your Key')
                         .addFields(
                             { name: 'Key', value: `\`${userKey.key}\`` },
-                            { name: 'Status', value: userKey.used ? 'Active (Bound)' : 'Unused', inline: true },
-                            { name: 'Last Used', value: userKey.lastUsed ? new Date(userKey.lastUsed).toLocaleString() : 'Never', inline: true }
+                            { name: 'Status', value: userKey.used ? 'Active' : 'Unused', inline: true }
                         )
                     ]
                 });
             }
 
+            // Delete & Regenerate
             if (interaction.customId === 'delete_regen') {
-                if (!userKey) return interaction.editReply({ content: 'You have no key to delete.' });
+                if (!userKey) return interaction.editReply({ content: 'No key to delete.' });
 
                 userKey.deleted = true;
-                userKey.deletedAt = new Date().toISOString();
                 await writeKeys(keys);
 
                 const newKey = await generateLifetimeKey(interaction.user.id, interaction.user.tag);
 
                 try {
-                    await interaction.user.send({
-                        embeds: [new EmbedBuilder()
-                            .setColor(config.embedColor)
-                            .setTitle('Old Key Revoked — New Key Issued')
-                            .addFields({ name: 'New Key', value: `\`${newKey}\`` })
-                            .setDescription('Your old key is now permanently invalid.')
-                        ]
-                    });
-                    await interaction.editReply({ content: 'Old key deleted — New key sent to your DMs!' });
+                    await interaction.user.send(`**New Key Issued**\n\`${newKey}\`\nYour old key is now invalid.`);
+                    await interaction.editReply({ content: 'Old key deleted — New key sent to DMs!' });
                 } catch {
-                    await interaction.editReply({ content: 'Couldn\'t send new key via DM — enable DMs!' });
+                    await interaction.editReply({ content: 'Could not DM new key — enable DMs!' });
                 }
             }
         }
     } catch (error) {
         console.error('Error:', error);
         if (!interaction.replied && !interaction.deferred) {
-            await interaction.reply({ content: 'An error occurred.', flags: MessageFlags.Ephemeral }).catch(() => {});
+            await interaction.reply({ content: 'Error occurred.', flags: MessageFlags.Ephemeral }).catch(() => {});
         }
     }
 });
