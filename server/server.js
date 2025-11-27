@@ -12,8 +12,23 @@ const { Client, GatewayIntentBits, EmbedBuilder, REST, Routes, ActivityType } = 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
+// Enhanced CORS - critical for Unity requests
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type']
+}));
+
+// Add explicit OPTIONS handler
+app.options('*', cors());
+
 app.use(express.json());
+
+// Add request logging
+app.use((req, res, next) => {
+    console.log(`📥 ${req.method} ${req.path} - ${new Date().toISOString()}`);
+    next();
+});
 
 const KEYS_FILE = path.join(__dirname, 'data', 'keys.json');
 const USERS_FILE = path.join(__dirname, 'data', 'users.json');
@@ -25,6 +40,7 @@ async function initializeDataFiles() {
         
         try {
             await fs.access(KEYS_FILE);
+            console.log('✅ Found keys.json');
         } catch {
             await fs.writeFile(KEYS_FILE, JSON.stringify([], null, 2));
             console.log('✅ Created keys.json');
@@ -32,6 +48,7 @@ async function initializeDataFiles() {
         
         try {
             await fs.access(USERS_FILE);
+            console.log('✅ Found users.json');
         } catch {
             await fs.writeFile(USERS_FILE, JSON.stringify([], null, 2));
             console.log('✅ Created users.json');
@@ -90,6 +107,7 @@ app.get('/', (req, res) => {
         status: 'online',
         message: 'Astrø Key System API',
         version: '1.0.0',
+        timestamp: new Date().toISOString(),
         endpoints: {
             health: 'GET /health',
             validate: 'POST /api/validate',
@@ -112,50 +130,73 @@ app.post('/api/validate', async (req, res) => {
     try {
         const { key, hwid } = req.body;
         
-        console.log(`📝 Validation request - Key: ${key?.substring(0, 8)}...`);
+        console.log(`📝 Validation request:`);
+        console.log(`   Key: ${key?.substring(0, 8)}...`);
+        console.log(`   HWID: ${hwid?.substring(0, 8)}...`);
         
+        // Validate input
         if (!key) {
+            console.log(`❌ No key provided`);
             return res.status(400).json({ 
                 valid: false, 
                 message: 'Key is required' 
             });
         }
 
+        if (!hwid) {
+            console.log(`❌ No HWID provided`);
+            return res.status(400).json({ 
+                valid: false, 
+                message: 'HWID is required' 
+            });
+        }
+
         const keys = await readKeys();
+        console.log(`📊 Total keys in database: ${keys.length}`);
+        
         const keyData = keys.find(k => k.key === key);
 
         if (!keyData) {
-            console.log(`❌ Key not found`);
+            console.log(`❌ Key not found in database`);
             return res.json({ 
                 valid: false, 
                 message: 'Invalid key' 
             });
         }
 
+        console.log(`✅ Key found in database`);
+        console.log(`   Used: ${keyData.used}`);
+        console.log(`   Stored HWID: ${keyData.hwid?.substring(0, 8) || 'none'}...`);
+        console.log(`   Expires: ${keyData.expiresAt || 'never'}`);
+
+        // Check if key is used by different HWID
         if (keyData.used && keyData.hwid !== hwid) {
             console.log(`❌ Key already in use by different HWID`);
             return res.json({ 
                 valid: false, 
-                message: 'Key already in use' 
+                message: 'Key already in use by another device' 
             });
         }
 
+        // Check if key is expired
         if (keyData.expiresAt && new Date(keyData.expiresAt) < new Date()) {
-            console.log(`❌ Key expired`);
+            console.log(`❌ Key expired at ${keyData.expiresAt}`);
             return res.json({ 
                 valid: false, 
-                message: 'Key expired' 
+                message: 'Key has expired' 
             });
         }
 
+        // First time use - bind to HWID
         if (!keyData.used) {
             keyData.used = true;
             keyData.usedAt = new Date().toISOString();
             keyData.hwid = hwid;
             keyData.lastUsed = new Date().toISOString();
             await writeKeys(keys);
-            console.log(`✅ Key activated`);
+            console.log(`✅ Key activated and bound to HWID`);
         } else {
+            // Re-validation of existing key
             keyData.lastUsed = new Date().toISOString();
             await writeKeys(keys);
             console.log(`✅ Key re-validated`);
@@ -169,9 +210,10 @@ app.post('/api/validate', async (req, res) => {
 
     } catch (error) {
         console.error('❌ Validation error:', error);
+        console.error('Stack:', error.stack);
         res.status(500).json({ 
             valid: false, 
-            message: 'Server error' 
+            message: 'Server error occurred' 
         });
     }
 });
@@ -183,7 +225,7 @@ app.post('/api/generate', async (req, res) => {
         console.log(`🔑 Key generation request from: ${discordUsername}`);
 
         if (adminToken !== process.env.ADMIN_TOKEN) {
-            console.log(`❌ Unauthorized`);
+            console.log(`❌ Unauthorized - invalid admin token`);
             return res.status(403).json({ 
                 success: false, 
                 message: 'Unauthorized' 
@@ -271,7 +313,7 @@ app.post('/api/reset', async (req, res) => {
         keyData.usedAt = null;
         await writeKeys(keys);
 
-        console.log(`✅ Key reset`);
+        console.log(`✅ Key reset: ${key.substring(0, 8)}...`);
 
         res.json({ 
             success: true, 
@@ -322,6 +364,15 @@ app.post('/api/keyinfo', async (req, res) => {
     }
 });
 
+// 404 handler
+app.use((req, res) => {
+    console.log(`❌ 404 - Route not found: ${req.method} ${req.path}`);
+    res.status(404).json({ 
+        error: 'Route not found',
+        path: req.path 
+    });
+});
+
 // ============================================
 // DISCORD BOT SETUP
 // ============================================
@@ -338,7 +389,6 @@ const config = {
     token: process.env.DISCORD_BOT_TOKEN,
     clientId: process.env.DISCORD_CLIENT_ID,
     guildId: process.env.DISCORD_GUILD_ID,
-    serverUrl: `http://localhost:${PORT}`, // Use local server
     adminToken: process.env.ADMIN_TOKEN,
     buyerRoleId: process.env.BUYER_ROLE_ID,
     adminRoleId: process.env.ADMIN_ROLE_ID,
@@ -428,7 +478,6 @@ client.on('interactionCreate', async interaction => {
             await interaction.deferReply({ ephemeral: true });
             const duration = interaction.options.getInteger('duration');
 
-            // Call local function directly (no HTTP request needed)
             const keyData = await generateKeyDirect(user.id, user.username, duration);
 
             const embed = new EmbedBuilder()
@@ -462,7 +511,7 @@ client.on('interactionCreate', async interaction => {
             const embed = new EmbedBuilder()
                 .setColor('#4CAF50')
                 .setTitle('✅ Key Reset Successfully')
-                .setDescription(`The key \`${key}\` has been reset and can be used again.`)
+                .setDescription(`The key \`${key.substring(0, 8)}...\` has been reset and can be used again.`)
                 .setTimestamp();
 
             await interaction.editReply({ embeds: [embed] });
@@ -501,7 +550,7 @@ client.on('interactionCreate', async interaction => {
                     { name: '📊 Status', value: keyData.used ? '🔴 Used' : '🟢 Unused', inline: true },
                     { name: '📅 Created', value: new Date(keyData.createdAt).toLocaleString(), inline: true },
                     { name: '⏰ Expires', value: keyData.expiresAt ? new Date(keyData.expiresAt).toLocaleString() : 'Never', inline: true },
-                    { name: '🖥️ HWID', value: keyData.hwid || 'Not bound', inline: true },
+                    { name: '🖥️ HWID', value: keyData.hwid ? `\`${keyData.hwid.substring(0, 16)}...\`` : 'Not bound', inline: true },
                     { name: '🕐 Last Used', value: keyData.lastUsed ? new Date(keyData.lastUsed).toLocaleString() : 'Never', inline: true }
                 )
                 .setTimestamp();
@@ -618,6 +667,7 @@ async function start() {
         // Start Express server
         app.listen(PORT, '0.0.0.0', () => {
             console.log(`✅ API Server running on port ${PORT}`);
+            console.log(`📡 Listening on http://0.0.0.0:${PORT}`);
         });
         
         // Register and start Discord bot
@@ -625,6 +675,7 @@ async function start() {
         await client.login(config.token);
         
         console.log('✅ All systems operational!');
+        console.log('📝 Logs will appear below...\n');
     } catch (error) {
         console.error('❌ Startup error:', error);
         process.exit(1);
