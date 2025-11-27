@@ -1,4 +1,4 @@
-// combined.js — FINAL 100% WORKING (NO EMOJI ERRORS EVER AGAIN)
+// combined.js — FINAL VERSION — NO EMOJIS — WORKS 100%
 
 const express = require('express');
 const cors = require('cors');
@@ -54,7 +54,7 @@ app.post('/api/validate', async (req, res) => {
     } catch { res.status(500).json({ valid: false }); }
 });
 
-app.listen(PORT, () => console.log(`API running on port ${PORT}`));
+app.listen(PORT, () => console.log(`API running on ${PORT}`));
 
 // ============================================
 // DISCORD BOT
@@ -70,7 +70,7 @@ const config = {
 };
 
 client.once('ready', async () => {
-    console.log(`Bot ready: ${client.user.tag}`);
+    console.log(`Bot online: ${client.user.tag}`);
     client.user.setActivity('Lifetime Keys', { type: ActivityType.Watching });
 
     const rest = new REST().setToken(config.token);
@@ -103,41 +103,41 @@ async function generateLifetimeKey(userId, username) {
 
 client.on('interactionCreate', async interaction => {
     try {
+        // /setup — PUBLIC PANEL
         if (interaction.isChatInputCommand() && interaction.commandName === 'setup') {
             if (!isAdmin(interaction.member)) {
-                return interaction.reply({ content: 'Only admins can use /setup', flags: MessageFlags.Ephemeral });
+                return interaction.reply({ content: 'Only admins can use this.', flags: MessageFlags.Ephemeral });
             }
 
             const row = new ActionRowBuilder().addComponents(
                 new ButtonBuilder()
                     .setCustomId('gen_key')
                     .setLabel('Generate Lifetime Key')
-                    .setStyle(ButtonStyle.Success)
-                    .setEmoji('Key'), // REAL UNICODE EMOJI
+                    .setStyle(ButtonStyle.Success),
 
                 new ButtonBuilder()
                     .setCustomId('check_key')
                     .setLabel('Check My Key')
-                    .setStyle(ButtonStyle.Primary)
-                    .setEmoji('Magnifying Glass'), // REAL UNICODE EMOJI
+                    .setStyle(ButtonStyle.Primary),
 
                 new ButtonBuilder()
                     .setCustomId('delete_regen')
                     .setLabel('Delete & Regenerate')
                     .setStyle(ButtonStyle.Danger)
-                    .setEmoji('Wastebasket') // REAL UNICODE EMOJI
             );
 
             const embed = new EmbedBuilder()
                 .setColor(config.embedColor)
                 .setTitle('Astrø Lifetime Key Panel')
-                .setDescription('One lifetime key per user\nYour key will be sent via DM')
-                .setFooter({ text: 'Keep your key private • Astrø Menu' });
+                .setDescription('One lifetime key per user\nKey will be sent to your DMs')
+                .setFooter({ text: 'Keep your key private' })
+                .setTimestamp();
 
             await interaction.reply({ embeds: [embed], components: [row] }); // PUBLIC
             return;
         }
 
+        // BUTTONS — EPHEMERAL REPLIES
         if (interaction.isButton()) {
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
@@ -149,21 +149,23 @@ client.on('interactionCreate', async interaction => {
 
                 const newKey = await generateLifetimeKey(interaction.user.id, interaction.user.tag);
                 try {
-                    await interaction.user.send(`**Your Lifetime Key**\n\`${newKey}\``);
+                    await interaction.user.send(`**Your Lifetime Key**\n\`${newKey}\`\nNever expires • Do NOT share`);
                     await interaction.editReply({ content: 'Key sent to your DMs!' });
                 } catch {
-                    await interaction.editReply({ content: 'Couldn\'t DM you — enable DMs!' });
+                    await interaction.editReply({ content: 'Cannot DM you — enable DMs from server members!' });
                 }
             }
 
             if (interaction.customId === 'check_key') {
-                if (!userKey) return interaction.editReply({ content: 'No key found.' });
+                if (!userKey) return interaction.editReply({ content: 'You don\'t have a key yet.' });
                 await interaction.editReply({
                     embeds: [new EmbedBuilder()
                         .setColor(config.embedColor)
-                        .setTitle('Your Key')
-                        .addFields({ name: 'Key', value: `\`${userKey.key}\`` })
-                        .addFields({ name: 'Status', value: userKey.used ? 'Active' : 'Unused', inline: true })
+                        .setTitle('Your Lifetime Key')
+                        .addFields(
+                            { name: 'Key', value: `\`${userKey.key}\`` },
+                            { name: 'Status', value: userKey.used ? 'Active' : 'Unused', inline: true }
+                        )
                     ]
                 });
             }
@@ -174,10 +176,10 @@ client.on('interactionCreate', async interaction => {
                 await writeKeys(keys);
                 const newKey = await generateLifetimeKey(interaction.user.id, interaction.user.tag);
                 try {
-                    await interaction.user.send(`**New Key Issued**\n\`${newKey}\``);
-                    await interaction.editReply({ content: 'Old key deleted — New key sent!' });
+                    await interaction.user.send(`**New Key Issued**\n\`${newKey}\`\nOld key revoked`);
+                    await interaction.editReply({ content: 'Old key deleted — New key sent to DMs!' });
                 } catch {
-                    await interaction.editReply({ content: 'Couldn\'t DM new key!' });
+                    await interaction.editReply({ content: 'Couldn\'t send new key — enable DMs!' });
                 }
             }
         }
